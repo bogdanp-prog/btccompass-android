@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Band colors matching the API band definitions -->
+    <color name="band_deep_value">#1e3a8a</color>
+    <color name="band_value">#3b82f6</color>
+    <color name="band_neutral">#6b7280</color>
+    <color name="band_frothy">#f97316</color>
+    <color name="band_euphoria">#dc2626</color>
+</resources>

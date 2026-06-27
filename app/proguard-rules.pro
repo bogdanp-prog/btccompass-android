@@ -1,0 +1,2 @@
+-keep class app.btccompass.android.data.api.dto.** { *; }
+-keepattributes *Annotation*
