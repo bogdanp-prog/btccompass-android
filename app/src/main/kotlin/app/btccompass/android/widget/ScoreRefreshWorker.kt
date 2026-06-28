@@ -53,12 +53,14 @@ class ScoreRefreshWorker(
             .build()
 
         fun enqueuePeriodicRefresh(context: Context) {
+            // No network constraint: the worker runs every 4h regardless of connectivity.
+            // On success it updates the snapshot; on failure it re-renders with the stored
+            // snapshot so the age label can advance and escalate to "⚠ Data stale" offline.
+            // UPDATE policy so constraints stay current across reinstalls and app updates.
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_PERIODIC,
-                ExistingPeriodicWorkPolicy.KEEP,
-                PeriodicWorkRequestBuilder<ScoreRefreshWorker>(4, TimeUnit.HOURS)
-                    .setConstraints(networkConstraints)
-                    .build(),
+                ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<ScoreRefreshWorker>(4, TimeUnit.HOURS).build(),
             )
         }
 
