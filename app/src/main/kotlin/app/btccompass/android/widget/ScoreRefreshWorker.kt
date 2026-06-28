@@ -28,15 +28,19 @@ class ScoreRefreshWorker(
             val fetchTime = System.currentTimeMillis()
             // getScore() also write-through caches into the app-level DataStore.
             val score = repository.getScore()
-            val manager = GlanceAppWidgetManager(applicationContext)
-            val glanceIds = manager.getGlanceIds(CompassWidget::class.java)
+            val glanceIds = GlanceAppWidgetManager(applicationContext).getGlanceIds(CompassWidget::class.java)
             for (id in glanceIds) {
                 persistScoreSnapshot(applicationContext, id, score, fetchTime)
                 CompassWidget().update(applicationContext, id)
             }
             Result.success()
         } catch (e: Exception) {
-            if (runAttemptCount < 2) Result.retry() else Result.failure()
+            if (runAttemptCount < 2) return Result.retry()
+            // Fetch failed permanently. Re-render with the unchanged snapshot so the age label
+            // can advance and cross the stale threshold — do NOT overwrite the stored instant.
+            val glanceIds = GlanceAppWidgetManager(applicationContext).getGlanceIds(CompassWidget::class.java)
+            for (id in glanceIds) CompassWidget().update(applicationContext, id)
+            Result.failure()
         }
     }
 
