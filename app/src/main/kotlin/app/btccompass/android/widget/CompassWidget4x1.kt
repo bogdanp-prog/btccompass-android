@@ -21,10 +21,12 @@ import androidx.glance.currentState
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
+import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
-import androidx.glance.layout.height
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
+import androidx.glance.layout.wrapContentWidth
 import androidx.glance.state.GlanceStateDefinition
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.glance.text.FontWeight
@@ -32,7 +34,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import app.btccompass.android.MainActivity
 
-class CompassWidget : GlanceAppWidget() {
+class CompassWidget4x1 : GlanceAppWidget() {
     override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -44,14 +46,14 @@ class CompassWidget : GlanceAppWidget() {
                 GlanceTheme.colors
             }
             GlanceTheme(colors = themeColors) {
-                WidgetRoot(prefs)
+                WidgetRoot4x1(prefs)
             }
         }
     }
 }
 
 @Composable
-private fun WidgetRoot(prefs: Preferences) {
+private fun WidgetRoot4x1(prefs: Preferences) {
     val score = prefs[KEY_SCORE]
     val bandName = prefs[KEY_BAND_NAME]
 
@@ -60,26 +62,33 @@ private fun WidgetRoot(prefs: Preferences) {
             .fillMaxSize()
             .appWidgetBackground()
             .background(GlanceTheme.colors.background)
-            .padding(12.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
             .clickable(actionStartActivity<MainActivity>()),
         contentAlignment = Alignment.Center,
     ) {
-        if (score == null || bandName == null) EmptyContent() else ScoreContent(prefs, score, bandName)
+        if (score == null || bandName == null) {
+            EmptyContent4x1()
+        } else {
+            ScoreContent4x1(prefs, score, bandName)
+        }
     }
 }
 
 @Composable
-private fun EmptyContent() {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun EmptyContent4x1() {
+    Row(
+        modifier = GlanceModifier.fillMaxSize(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
-            text = "—",
+            text = "—  Compass",
             style = TextStyle(
-                fontSize = 40.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = GlanceTheme.colors.onBackground,
             ),
         )
-        Spacer(modifier = GlanceModifier.height(4.dp))
+        Spacer(modifier = GlanceModifier.defaultWeight())
         Text(
             text = "Updating…",
             style = TextStyle(fontSize = 12.sp, color = GlanceTheme.colors.onBackground),
@@ -88,46 +97,60 @@ private fun EmptyContent() {
 }
 
 @Composable
-private fun ScoreContent(prefs: Preferences, score: Float, bandName: String) {
+private fun ScoreContent4x1(prefs: Preferences, score: Float, bandName: String) {
     val bandColor = bandColorProvider(prefs[KEY_BAND_COLOR]) ?: GlanceTheme.colors.primary
     val dataAsOfEpochMs = prefs[KEY_DATA_AS_OF_EPOCH_MS]
     val staleLabel = dataAsOfEpochMs?.let { staleLabelText(it) } ?: ""
 
-    Column(
+    Row(
         modifier = GlanceModifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = "%.2f".format(score),
-            style = TextStyle(
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Bold,
-                color = GlanceTheme.colors.onBackground,
-            ),
-        )
-        Spacer(modifier = GlanceModifier.height(2.dp))
-        Text(
-            text = bandName,
-            style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium, color = bandColor),
-        )
-        Spacer(modifier = GlanceModifier.height(6.dp))
-        Text(
-            text = priceText(prefs[KEY_PRICE_USD]),
-            style = TextStyle(fontSize = 14.sp, color = GlanceTheme.colors.onBackground),
-        )
-        if (staleLabel.isNotEmpty()) {
-            Spacer(modifier = GlanceModifier.height(2.dp))
+        // Left: score + band name
+        Column(
+            modifier = GlanceModifier.wrapContentWidth(),
+            horizontalAlignment = Alignment.Start,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text = staleLabel,
-                style = TextStyle(fontSize = 10.sp, color = GlanceTheme.colors.onBackground),
+                text = "%.2f".format(score),
+                style = TextStyle(
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = GlanceTheme.colors.onBackground,
+                ),
             )
+            Text(
+                text = bandName,
+                style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = bandColor),
+            )
+        }
+
+        // Push right column to the trailing edge
+        Spacer(modifier = GlanceModifier.defaultWeight())
+
+        // Right: price + staleness
+        Column(
+            modifier = GlanceModifier.wrapContentWidth(),
+            horizontalAlignment = Alignment.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = priceText(prefs[KEY_PRICE_USD]),
+                style = TextStyle(fontSize = 16.sp, color = GlanceTheme.colors.onBackground),
+            )
+            if (staleLabel.isNotEmpty()) {
+                Text(
+                    text = staleLabel,
+                    style = TextStyle(fontSize = 11.sp, color = GlanceTheme.colors.onBackground),
+                )
+            }
         }
     }
 }
 
-class CompassWidgetReceiver : GlanceAppWidgetReceiver() {
-    override val glanceAppWidget: GlanceAppWidget = CompassWidget()
+class CompassWidget4x1Receiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = CompassWidget4x1()
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)

@@ -26,20 +26,17 @@ class ScoreRefreshWorker(
     override suspend fun doWork(): Result {
         return try {
             val fetchTime = System.currentTimeMillis()
-            // getScore() also write-through caches into the app-level DataStore.
+            // getScore() also write-through caches into the app-level ScoreCache DataStore.
             val score = repository.getScore()
-            val glanceIds = GlanceAppWidgetManager(applicationContext).getGlanceIds(CompassWidget::class.java)
-            for (id in glanceIds) {
-                persistScoreSnapshot(applicationContext, id, score, fetchTime)
-                CompassWidget().update(applicationContext, id)
-            }
+            // Fan-out: persist snapshot + re-render every placed instance of every widget size.
+            // Single fetch, single schedule, all sizes updated in one worker run.
+            persistAndRenderAll(applicationContext, score, fetchTime)
             Result.success()
         } catch (e: Exception) {
             if (runAttemptCount < 2) return Result.retry()
             // Fetch failed permanently. Re-render with the unchanged snapshot so the age label
             // can advance and cross the stale threshold — do NOT overwrite the stored instant.
-            val glanceIds = GlanceAppWidgetManager(applicationContext).getGlanceIds(CompassWidget::class.java)
-            for (id in glanceIds) CompassWidget().update(applicationContext, id)
+            reRenderAll(applicationContext)
             Result.failure()
         }
     }
@@ -74,4 +71,31 @@ class ScoreRefreshWorker(
             )
         }
     }
+}
+
+private suspend fun persistAndRenderAll(
+    context: Context,
+    score: app.btccompass.android.data.api.dto.ScoreDto,
+    fetchTimeMillis: Long,
+) {
+    val manager = GlanceAppWidgetManager(context)
+    for (id in manager.getGlanceIds(CompassWidget::class.java)) {
+        persistScoreSnapshot(context, id, score, fetchTimeMillis)
+        CompassWidget().update(context, id)
+    }
+    for (id in manager.getGlanceIds(CompassWidget1x1::class.java)) {
+        persistScoreSnapshot(context, id, score, fetchTimeMillis)
+        CompassWidget1x1().update(context, id)
+    }
+    for (id in manager.getGlanceIds(CompassWidget4x1::class.java)) {
+        persistScoreSnapshot(context, id, score, fetchTimeMillis)
+        CompassWidget4x1().update(context, id)
+    }
+}
+
+private suspend fun reRenderAll(context: Context) {
+    val manager = GlanceAppWidgetManager(context)
+    for (id in manager.getGlanceIds(CompassWidget::class.java)) CompassWidget().update(context, id)
+    for (id in manager.getGlanceIds(CompassWidget1x1::class.java)) CompassWidget1x1().update(context, id)
+    for (id in manager.getGlanceIds(CompassWidget4x1::class.java)) CompassWidget4x1().update(context, id)
 }

@@ -26,9 +26,10 @@ All code, comments, commit messages in **English**. Romanian only in user conver
 | Serialization | Kotlinx Serialization JSON |
 | Async | Kotlin Coroutines + StateFlow |
 | DI | Koin 4.x |
-| Local cache (v1.1) | Room (dependency added, not used yet) |
-| Widget (later) | Jetpack Glance |
-| Background (later) | WorkManager |
+| Score cache | DataStore Preferences (`score_cache`) — single source of truth |
+| Local cache (deferred) | Room (dependency added; not used until History/heatmap screen) |
+| Widget | Jetpack Glance 1.1.1 (2×2 live score widget, shipped) |
+| Background refresh | WorkManager 2.10.0 (4 h periodic, no network constraint) |
 | Charts (later) | Vico |
 | Crash reporting | Sentry (dependency added; init when DSN is available) |
 
@@ -36,27 +37,96 @@ All code, comments, commit messages in **English**. Romanian only in user conver
 
 ```
 app/src/main/kotlin/app/btccompass/android/
-├── CompassApp.kt          — Application class, Koin init
+├── CompassApp.kt          — Application class, Koin init, periodic WorkManager registration
 ├── MainActivity.kt        — Compose entry point
 ├── data/
-│   └── api/
-│       ├── ScoreApi.kt    — Ktor HTTP client, GET /api/score
-│       └── dto/
-│           └── ScoreDto.kt — Kotlinx Serialization DTOs
+│   ├── api/
+│   │   ├── ScoreApi.kt    — Ktor HTTP client, GET /api/score
+│   │   └── dto/
+│   │       └── ScoreDto.kt — Kotlinx Serialization DTOs
+│   └── cache/
+│       └── ScoreCache.kt  — DataStore Preferences; write(ScoreDto), observe(): Flow<ScoreSnapshot?>
 ├── domain/
+│   ├── model/
+│   │   └── ScoreSnapshot.kt — UI-facing value object (score, band, price, dataAsOfEpochMillis)
 │   └── repository/
-│       └── ScoreRepository.kt — interface + impl
+│       └── ScoreRepository.kt — interface + impl (write-through: getScore() → cache + return)
 ├── ui/
 │   ├── home/
-│   │   ├── HomeScreen.kt  — Composable
-│   │   └── HomeViewModel.kt — StateFlow<HomeUiState>
+│   │   ├── HomeScreen.kt  — Composable; cache-first render
+│   │   └── HomeViewModel.kt — StateFlow<HomeUiState>; observes cache Flow, fires network refresh
 │   └── theme/
 │       └── Theme.kt       — Material 3 + dynamic colors
 ├── di/
 │   └── AppModule.kt       — Koin module
-├── widget/                — (placeholder, Glance widget later)
-└── work/                  — (placeholder, WorkManager later)
+└── widget/
+    ├── CompassWidget.kt       — GlanceAppWidget (2×2); reads Glance-state DataStore at render time
+    ├── CompassWidgetReceiver.kt — GlanceAppWidgetReceiver; triggers one-time + periodic refresh on first add
+    └── ScoreRefreshWorker.kt  — CoroutineWorker; fetches → writes ScoreCache → projects to Glance state → update()
 ```
+
+## Data layer
+
+### Single source of truth
+
+`ScoreCache` (DataStore Preferences, file `score_cache`) is the authoritative store for the latest
+score snapshot. Every successful network fetch in `ScoreRepositoryImpl.getScore()` writes through to
+it; the read path is `observeCachedScore(): Flow<ScoreSnapshot?>`.
+
+**Why Preferences DataStore, not Room:** the snapshot is a flat 5-field value — score, band name,
+band color, price, and `dataAsOfEpochMillis`. Room is deferred until the History/heatmap screen
+requires multi-row time-series storage. Proto DataStore was also ruled out (code-gen overhead
+unjustified for a single flat record).
+
+### Cache-first rendering
+
+`HomeViewModel` launches two coroutines on `init`:
+1. Collects `observeCachedScore()` — emits immediately from disk, drives `HomeUiState.Success`.
+2. Fires `getScore()` — write-through updates the cache Flow, which updates the UI in turn.
+
+A failed refresh **must not clobber a cached score**. `HomeUiState.Error` is emitted only when the
+cache is empty and the network call also fails. This invariant must not regress.
+
+## Widget
+
+### Architecture (Glance 2×2)
+
+`ScoreRefreshWorker` owns the data path for the widget:
+1. Calls `repository.getScore()` — fetches live, writes through to `ScoreCache`.
+2. Projects a render subset (`score`, `bandName`, `bandColor`, `priceUsd`, `dataAsOfEpochMillis`)
+   into the widget's own Glance-state DataStore via `updateAppWidgetState` + `persistScoreSnapshot`.
+3. Calls `CompassWidget().update()` on every registered instance.
+
+Two physical DataStores exist (app-level `score_cache` + Glance's per-widget store). This is
+inherent to Glance running in a separate process; they are consistent by construction (both derived
+from the same fetch) and not independent duplicates.
+
+### Staleness label
+
+`dataAsOfEpochMillis = fetchTimeMillis − staleMinutes × 60 000` is stored as an absolute instant.
+Age is computed at render time:
+
+```
+ageMinutes = (System.currentTimeMillis() − dataAsOfEpochMillis) / 60_000
+```
+
+This ensures the label advances correctly between refreshes (a frozen `stale_minutes` would not).
+`STALE_THRESHOLD_MINUTES = 8 * 60L` is defined in both `CompassWidget` and `HomeScreen`; both must
+stay in sync. Above the threshold the label reads **"⚠ Data stale"**.
+
+### Self-escalation on failure
+
+`ScoreRefreshWorker` calls `CompassWidget().update()` even in the `catch` block (after exhausting
+retries). The snapshot on disk is left unchanged; the re-render advances the age label so it can
+cross the stale threshold while the device is offline. **Do not remove this call.**
+
+### Refresh scheduling
+
+- **Periodic:** `enqueueUniquePeriodicWork(UPDATE, 4 h, no network constraint)` — runs every 4 h
+  regardless of connectivity. Registered in both `Application.onCreate` (survives `pm clear` /
+  WorkManager DB wipe) and `CompassWidgetReceiver.onEnabled`.
+- **One-time:** `enqueueUniqueWork(REPLACE, NetworkType.CONNECTED)` — triggered on widget first-add
+  (`onEnabled`) to populate the snapshot immediately.
 
 ## API contract
 
@@ -110,15 +180,16 @@ APK output: `app/build/outputs/apk/debug/app-debug.apk`
 - Java: 17 (bundled in Android Studio JBR)
 - Gradle: 8.10.2
 
-## Current state (v0 skeleton — 2026-06-27)
+## Current state (v1.1 — 2026-06-28)
 
-- Single HomeScreen showing: score (2 decimals), band name (in band color), BTC price, stale_minutes
+- HomeScreen: score (2 decimals), band name (in band color), BTC price, staleness label
 - Loading and error states with retry
-- No local caching (Room wired but unused)
-- No widget
-- No chart
+- Cache-first rendering via DataStore Preferences (`score_cache`)
+- Glance 2×2 home-screen widget: score, band name, price, staleness label
+- WorkManager 4 h periodic refresh (no network constraint; self-escalates stale label offline)
 - Sentry not initialized (no DSN yet)
 - Launcher icons: placeholder blue squares
+- No chart
 
 ## Emulator
 
@@ -133,13 +204,17 @@ Launch: `$ANDROID_HOME/emulator/emulator -avd compass_pixel7`
 Install: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 Start: `adb shell am start -n app.btccompass.android/.MainActivity`
 
+Kill connectivity (airplane mode is ignored by the emulator):
+```bash
+adb shell svc wifi disable && adb shell svc data disable
+adb shell svc wifi enable  && adb shell svc data enable
+```
+
 ## Backlog (next sessions)
 
 - Replace placeholder icons with real Compass icon
 - Add Sentry DSN + init
 - HomeScreen redesign (gauge arc, animations)
 - `/api/history` integration + Vico chart
-- Glance widget (score + band color)
-- WorkManager background refresh every 6h
-- Room cache for offline mode
+- Room cache (multi-row time-series for History/heatmap screen)
 - `/api/price` endpoint integration for widget
