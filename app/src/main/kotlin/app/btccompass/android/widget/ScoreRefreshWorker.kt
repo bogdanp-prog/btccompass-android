@@ -25,11 +25,13 @@ class ScoreRefreshWorker(
 
     override suspend fun doWork(): Result {
         return try {
+            val fetchTime = System.currentTimeMillis()
+            // getScore() also write-through caches into the app-level DataStore.
             val score = repository.getScore()
             val manager = GlanceAppWidgetManager(applicationContext)
             val glanceIds = manager.getGlanceIds(CompassWidget::class.java)
             for (id in glanceIds) {
-                persistScoreSnapshot(applicationContext, id, score)
+                persistScoreSnapshot(applicationContext, id, score, fetchTime)
                 CompassWidget().update(applicationContext, id)
             }
             Result.success()

@@ -20,9 +20,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.btccompass.android.domain.model.ScoreSnapshot
 import org.koin.androidx.compose.koinViewModel
 import java.text.NumberFormat
 import java.util.Locale
+
+private const val STALE_THRESHOLD_MINUTES = 8 * 60L
 
 @Composable
 fun HomeScreen(
@@ -37,18 +40,23 @@ fun HomeScreen(
         when (val state = uiState) {
             HomeUiState.Loading -> CircularProgressIndicator()
             is HomeUiState.Error -> ErrorContent(message = state.message, onRetry = viewModel::retry)
-            is HomeUiState.Success -> ScoreContent(state = state)
+            is HomeUiState.Success -> ScoreContent(state.snapshot)
         }
     }
 }
 
 @Composable
-private fun ScoreContent(state: HomeUiState.Success) {
-    val score = state.score
-    val bandColor = runCatching { Color(android.graphics.Color.parseColor(score.band.color)) }
+private fun ScoreContent(snapshot: ScoreSnapshot) {
+    val bandColor = runCatching { Color(android.graphics.Color.parseColor(snapshot.bandColor)) }
         .getOrDefault(MaterialTheme.colorScheme.primary)
-    val priceFormatted = NumberFormat.getNumberInstance(Locale.US)
-        .format(score.price.usd.toLong())
+    val priceFormatted = NumberFormat.getNumberInstance(Locale.US).format(snapshot.priceUsd.toLong())
+
+    val ageMinutes = (System.currentTimeMillis() - snapshot.dataAsOfEpochMillis) / 60_000L
+    val staleLabel = when {
+        ageMinutes > STALE_THRESHOLD_MINUTES -> "⚠ Data stale"
+        ageMinutes < 60 -> "Updated ${ageMinutes}m ago"
+        else -> "Updated ${ageMinutes / 60}h ago"
+    }
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -56,14 +64,14 @@ private fun ScoreContent(state: HomeUiState.Success) {
         modifier = Modifier.padding(24.dp),
     ) {
         Text(
-            text = "%.2f".format(score.score),
+            text = "%.2f".format(snapshot.score),
             fontSize = 72.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = score.band.name,
+            text = snapshot.bandName,
             fontSize = 24.sp,
             fontWeight = FontWeight.Medium,
             color = bandColor,
@@ -76,7 +84,7 @@ private fun ScoreContent(state: HomeUiState.Success) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Last updated ${score.staleMinutes} min ago",
+            text = staleLabel,
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )

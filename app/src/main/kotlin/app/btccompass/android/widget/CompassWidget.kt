@@ -8,9 +8,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
-import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
@@ -43,32 +42,34 @@ import app.btccompass.android.data.api.dto.ScoreDto
 import java.text.NumberFormat
 import java.util.Locale
 
-// Keys for the per-widget DataStore preferences snapshot
+// Keys for the per-widget Glance DataStore snapshot (render projection)
 internal val KEY_SCORE = floatPreferencesKey("widget_score")
 internal val KEY_BAND_NAME = stringPreferencesKey("widget_band_name")
 internal val KEY_BAND_COLOR = stringPreferencesKey("widget_band_color")
 internal val KEY_PRICE_USD = floatPreferencesKey("widget_price_usd")
-internal val KEY_STALE_MINUTES = intPreferencesKey("widget_stale_minutes")
-internal val KEY_IS_STALE = booleanPreferencesKey("widget_is_stale")
+// Absolute instant when the underlying on-chain data was computed; age is derived at render time.
+internal val KEY_DATA_AS_OF_EPOCH_MS = longPreferencesKey("widget_data_as_of_epoch_ms")
 
-/** Persists a [ScoreDto] snapshot into the given widget instance's preferences. */
+private const val STALE_THRESHOLD_MINUTES = 8 * 60L
+
+/** Projects a [ScoreDto] snapshot into the Glance widget's per-instance preferences store. */
 internal suspend fun persistScoreSnapshot(
     context: Context,
     glanceId: GlanceId,
     score: ScoreDto,
+    fetchTimeMillis: Long,
 ) {
+    val dataAsOf = fetchTimeMillis - (score.staleMinutes * 60_000L)
     updateAppWidgetState(context, glanceId) { prefs: MutablePreferences ->
         prefs[KEY_SCORE] = score.score.toFloat()
         prefs[KEY_BAND_NAME] = score.band.name
         prefs[KEY_BAND_COLOR] = score.band.color
         prefs[KEY_PRICE_USD] = score.price.usd.toFloat()
-        prefs[KEY_STALE_MINUTES] = score.staleMinutes
-        prefs[KEY_IS_STALE] = score.isStale
+        prefs[KEY_DATA_AS_OF_EPOCH_MS] = dataAsOf
     }
 }
 
 class CompassWidget : GlanceAppWidget() {
-
     override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -122,10 +123,7 @@ private fun EmptyContent() {
         Spacer(modifier = GlanceModifier.height(4.dp))
         Text(
             text = "Updating…",
-            style = TextStyle(
-                fontSize = 12.sp,
-                color = GlanceTheme.colors.onBackground,
-            ),
+            style = TextStyle(fontSize = 12.sp, color = GlanceTheme.colors.onBackground),
         )
     }
 }
@@ -134,10 +132,8 @@ private fun EmptyContent() {
 private fun ScoreContent(prefs: Preferences, score: Float, bandName: String) {
     val bandColorHex = prefs[KEY_BAND_COLOR]
     val priceUsd = prefs[KEY_PRICE_USD]
-    val staleMinutes = prefs[KEY_STALE_MINUTES]
-    val isStale = prefs[KEY_IS_STALE] ?: false
+    val dataAsOfEpochMs = prefs[KEY_DATA_AS_OF_EPOCH_MS]
 
-    // Band color is a semantic brand color from the API — consistent on light & dark.
     val bandColor: ColorProvider = bandColorHex
         ?.let { hex -> runCatching { ColorProvider(Color(android.graphics.Color.parseColor(hex))) }.getOrNull() }
         ?: GlanceTheme.colors.primary
@@ -146,12 +142,15 @@ private fun ScoreContent(prefs: Preferences, score: Float, bandName: String) {
         "$" + NumberFormat.getNumberInstance(Locale.US).format(it.toLong())
     } ?: "—"
 
-    val staleLabel = when {
-        staleMinutes == null -> ""
-        isStale -> "⚠ Data stale"
-        staleMinutes < 60 -> "Updated ${staleMinutes}m ago"
-        else -> "Updated ${staleMinutes / 60}h ago"
-    }
+    // Age computed at render time so the label advances correctly between refreshes.
+    val staleLabel = dataAsOfEpochMs?.let { epoch ->
+        val ageMinutes = (System.currentTimeMillis() - epoch) / 60_000L
+        when {
+            ageMinutes > STALE_THRESHOLD_MINUTES -> "⚠ Data stale"
+            ageMinutes < 60 -> "Updated ${ageMinutes}m ago"
+            else -> "Updated ${ageMinutes / 60}h ago"
+        }
+    } ?: ""
 
     Column(
         modifier = GlanceModifier.fillMaxSize(),
@@ -178,19 +177,13 @@ private fun ScoreContent(prefs: Preferences, score: Float, bandName: String) {
         Spacer(modifier = GlanceModifier.height(6.dp))
         Text(
             text = priceText,
-            style = TextStyle(
-                fontSize = 14.sp,
-                color = GlanceTheme.colors.onBackground,
-            ),
+            style = TextStyle(fontSize = 14.sp, color = GlanceTheme.colors.onBackground),
         )
         if (staleLabel.isNotEmpty()) {
             Spacer(modifier = GlanceModifier.height(2.dp))
             Text(
                 text = staleLabel,
-                style = TextStyle(
-                    fontSize = 10.sp,
-                    color = GlanceTheme.colors.onBackground,
-                ),
+                style = TextStyle(fontSize = 10.sp, color = GlanceTheme.colors.onBackground),
             )
         }
     }
@@ -201,7 +194,6 @@ class CompassWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        // First widget instance added: immediate one-time refresh + 4h periodic cycle.
         ScoreRefreshWorker.enqueueOneTimeRefresh(context)
         ScoreRefreshWorker.enqueuePeriodicRefresh(context)
     }
